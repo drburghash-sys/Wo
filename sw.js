@@ -1,6 +1,6 @@
-/* Khatwati PWA v1.3: navigation and code updated online, cached offline. */
-const CACHE='khatwati-shell-v4';
-const ASSETS=['./','./index.html','./styles.css?v=1.3','./app.js?v=1.3','./privacy.html','./manifest.webmanifest','./assets/icon-192.png','./assets/icon-512.png','./assets/apple-touch-icon.png'];
+/* Khatwati PWA v1.4: navigation and code updated online, cached offline. */
+const CACHE='khatwati-shell-v5';
+const ASSETS=['./','./index.html','./styles.css?v=1.4','./app.js?v=1.4','./privacy.html','./manifest.webmanifest','./assets/icon-192.png','./assets/icon-512.png','./assets/apple-touch-icon.png'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE&&k.startsWith('khatwati-shell-')).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{
