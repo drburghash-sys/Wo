@@ -2,7 +2,9 @@
 (() => {
 'use strict';
 const KEY='khatwati_data_v1';
-const defaults=()=>({version:1,profile:null,plan:'moderate',goalDays:30,goalStart:'',goalStartWeight:0,exerciseIntensity:'moderate',waterGoal:2200,minutesGoal:30,logs:[],weights:[],adjustment:'',settings:{dark:false,reminders:false,frequency:3,quietStart:'23:00',quietEnd:'07:00',lastReminder:''}});
+const IDB_NAME='khatwati-private-device-v1';
+const IDB_STORE='settings';
+const defaults=()=>({version:1,_savedAt:0,profile:null,customCalories:null,plan:'moderate',goalDays:30,goalStart:'',goalStartWeight:0,exerciseIntensity:'moderate',waterGoal:2200,minutesGoal:30,logs:[],weights:[],adjustment:'',settings:{dark:false,reminders:false,frequency:3,quietStart:'23:00',quietEnd:'07:00',lastReminder:''}});
 let state=defaults();
 try { const raw=localStorage.getItem(KEY); if(raw)state=validateData(JSON.parse(raw)); }catch(e){console.warn('تعذر استعادة الحفظ المحلي',e)}
 const $=(id)=>document.getElementById(id);
@@ -59,17 +61,88 @@ function calculate(weight=currentWeight(),plan=state.plan){
  const requestedDeficit=clamp(desiredDaily,tdee*selected.minDeficit,maxDeficit);
  const noDeficit=!atGoal&&(tdee<=floor||maxDeficit<100);
  const raw=atGoal?tdee:noDeficit?tdee:Math.max(floor,tdee-requestedDeficit);
- const calories=atGoal?round50(tdee):Math.min(Math.floor(tdee/50)*50,Math.max(Math.ceil(floor/50)*50,round50(raw)));
+ const automatic=atGoal?round50(tdee):Math.min(Math.floor(tdee/50)*50,Math.max(Math.ceil(floor/50)*50,round50(raw)));
+ const manual=Number.isInteger(state.customCalories)&&state.customCalories>0;
+ const calories=manual?state.customCalories:automatic;
  const deficit=Math.max(0,Math.round(tdee-calories));
  const safeLoss=Math.max(0,Math.min(desiredLoss,deficit*period.days/7700));
  const requiredWeekly=period.days?desiredLoss*7/period.days:0;
  const notFeasible=!atGoal&&desiredLoss>0.05&&(requiredWeekly>Math.min(0.9,weight*0.01)||desiredDaily>Math.min(MAX_DAILY_DEFICIT,tdee*selected.maxDeficit,tdee-floor)+40);
- return {rmr:Math.round(rmr),tdee:Math.round(tdee),calories,deficit,atGoal,noDeficit,floor,period,desiredLoss,safeLoss,requiredWeekly,notFeasible};
+ return {rmr:Math.round(rmr),tdee:Math.round(tdee),calories,deficit,manual,weeklyLoss:Math.max(0,deficit*7/7700),atGoal,noDeficit,floor,period,desiredLoss,safeLoss,requiredWeekly,notFeasible};
 }
-function save(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){toast('تعذر الحفظ، تأكد من مساحة التخزين المتاحة')}}
+// بيانات المستخدم محفوظة على الجهاز فقط: localStorage + IndexedDB. لا ترسل إلى GitHub أو أي خادم.
+function openPrivateDB(){
+ return new Promise(resolve=>{
+  if(!('indexedDB' in window))return resolve(null);
+  let settled=false;
+  const finish=v=>{if(!settled){settled=true;clearTimeout(timer);resolve(v)}};
+  const timer=setTimeout(()=>finish(null),2300);
+  try{
+   const request=indexedDB.open(IDB_NAME,1);
+   request.onupgradeneeded=()=>{if(!request.result.objectStoreNames.contains(IDB_STORE))request.result.createObjectStore(IDB_STORE)};
+   request.onsuccess=()=>{if(settled){request.result.close();return}finish(request.result)};
+   request.onerror=()=>finish(null);request.onblocked=()=>finish(null);
+  }catch(e){finish(null)}
+ });
+}
+async function readIndexed(){
+ const db=await openPrivateDB();if(!db)return null;
+ return new Promise(resolve=>{try{
+  const tx=db.transaction(IDB_STORE,'readonly'),r=tx.objectStore(IDB_STORE).get(KEY);
+  r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>resolve(null);
+  tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();resolve(null)}
+ }catch(e){db.close();resolve(null)}});
+}
+async function writeIndexed(serialized){
+ const db=await openPrivateDB();if(!db)return false;
+ return new Promise(resolve=>{let complete=false;try{
+  const tx=db.transaction(IDB_STORE,'readwrite');
+  tx.objectStore(IDB_STORE).put(serialized,KEY);
+  tx.oncomplete=()=>{complete=true;db.close();resolve(true)};
+  tx.onerror=tx.onabort=()=>{if(!complete){db.close();resolve(false)}};
+ }catch(e){db.close();resolve(false)}});
+}
+async function clearIndexed(){
+ const db=await openPrivateDB();if(!db)return;
+ return new Promise(resolve=>{try{
+  const tx=db.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).delete(KEY);
+  tx.oncomplete=tx.onerror=tx.onabort=()=>{db.close();resolve()};
+ }catch(e){db.close();resolve()}});
+}
+async function restoreState(){
+ const candidates=[];
+ if(state.profile)candidates.push(state);
+ try{const raw=localStorage.getItem(KEY);if(raw)candidates.push(validateData(JSON.parse(raw)))}catch(e){console.warn('Local backup unavailable',e)}
+ try{const raw=await readIndexed();if(raw)candidates.push(validateData(JSON.parse(raw)))}catch(e){console.warn('Indexed backup unavailable',e)}
+ const available=candidates.filter(x=>x.profile).sort((a,b)=>(b._savedAt||0)-(a._savedAt||0));
+ if(available.length){state=available[0];await save();}
+}
+let writeQueue=Promise.resolve(true);
+function save(){
+ state._savedAt=Date.now();
+ const snapshot=JSON.stringify(state);
+ let localOK=false;
+ try{localStorage.setItem(KEY,snapshot);localOK=localStorage.getItem(KEY)===snapshot}catch(e){console.warn('localStorage unavailable',e)}
+ writeQueue=writeQueue.catch(()=>false).then(()=>writeIndexed(snapshot)).then(dbOK=>{
+  if(!localOK&&!dbOK){try{toast('تنبيه: لم تُحفظ البيانات على الجهاز؛ احفظ نسخة احتياطية وتأكد من وضع المتصفح')}catch(e){}}
+  return localOK||dbOK;
+ });
+ return writeQueue;
+}
+function validateCalorieChoice(raw,p,weight){
+ if(raw===null||raw===undefined||String(raw).trim()==='')return {value:null,message:''};
+ const val=Number(raw);
+ if(!Number.isInteger(val)||val<1||val>6000)return {value:null,message:'أدخل هدف سعرات صحيحًا بين 1 و6000.'};
+ const tdee=(10*weight+6.25*p.height-5*p.age+(p.sex==='male'?5:-161))*p.activity;
+ const floor=p.sex==='male'?1500:1200;
+ const maxLossDeficit=Math.min(750,tdee*.30,weight*.01*7700/7);
+ const minAllowed=Math.max(floor,Math.ceil((tdee-maxLossDeficit)/50)*50);
+ if(val<minAllowed)return {value:null,message:`هدف ${val} سعرة منخفض جدًا حسب بياناتك. الحد الأدنى المبدئي لهذا المسار ${Math.ceil(minAllowed)} سعرة. للمستويات الأدنى استشر مختصًا.`};
+ return {value:val,message:''};
+}
 function toast(msg){const el=$('toast');el.textContent=msg;el.classList.add('show');clearTimeout(toast._timer);toast._timer=setTimeout(()=>el.classList.remove('show'),3100)}
 function validateData(obj){if(!obj||typeof obj!=='object'||obj.version!==1)throw Error('صيغة النسخة غير مدعومة');const s=defaults();const p=obj.profile;if(p){if(!['male','female'].includes(p.sex)||n(p.age)<18||n(p.age)>100||n(p.height)<120||n(p.height)>230||n(p.weight)<30||n(p.weight)>400||n(p.target)<30||n(p.target)>350||n(p.target)>=n(p.weight)||bmiFor(n(p.height),n(p.target))<18.5||bmiFor(n(p.height),n(p.weight))<25)throw Error('بيانات المستخدم غير صالحة');s.profile={age:n(p.age),sex:p.sex,height:n(p.height),weight:n(p.weight),target:n(p.target),activity:[1.2,1.375,1.55,1.725].includes(n(p.activity))?n(p.activity):1.2,health:Array.isArray(p.health)?p.health.filter(x=>['pregnancy','eating','medical','other'].includes(x)).slice(0,4):[]};}
- s.plan=plans[obj.plan]?obj.plan:'moderate';s.goalDays=[14,30,60].includes(n(obj.goalDays))?n(obj.goalDays):30;s.goalStart=/^\d{4}-\d{2}-\d{2}$/.test(String(obj.goalStart||''))?obj.goalStart:today();s.goalStartWeight=n(obj.goalStartWeight)>0?n(obj.goalStartWeight):(s.profile?.weight||0);s.exerciseIntensity=obj.exerciseIntensity==='vigorous'?'vigorous':'moderate';s.waterGoal=clamp(n(obj.waterGoal,2200),500,6000);s.minutesGoal=clamp(n(obj.minutesGoal,30),5,180);
+ s._savedAt=Math.max(0,n(obj._savedAt,0));s.customCalories=Number.isInteger(obj.customCalories)&&obj.customCalories>0&&obj.customCalories<=6000?obj.customCalories:null;s.plan=plans[obj.plan]?obj.plan:'moderate';s.goalDays=[14,30,60].includes(n(obj.goalDays))?n(obj.goalDays):30;s.goalStart=/^\d{4}-\d{2}-\d{2}$/.test(String(obj.goalStart||''))?obj.goalStart:today();s.goalStartWeight=n(obj.goalStartWeight)>0?n(obj.goalStartWeight):(s.profile?.weight||0);s.exerciseIntensity=obj.exerciseIntensity==='vigorous'?'vigorous':'moderate';s.waterGoal=clamp(n(obj.waterGoal,2200),500,6000);s.minutesGoal=clamp(n(obj.minutesGoal,30),5,180);
  s.logs=Array.isArray(obj.logs)?obj.logs.slice(-6000).filter(x=>x&&['water','food','exercise'].includes(x.type)&&/^\d{4}-\d{2}-\d{2}$/.test(String(x.date))&&n(x.amount)>=0&&n(x.amount)<=10000).map(x=>({id:String(x.id||id()).slice(0,60),date:String(x.date),type:x.type,label:String(x.label||'').slice(0,90),amount:n(x.amount),calories:clamp(n(x.calories),0,5000),minutes:clamp(n(x.minutes),0,300),time:n(x.time,Date.now())})):[];
  s.weights=Array.isArray(obj.weights)?obj.weights.slice(-500).filter(x=>x&&/^\d{4}-\d{2}-\d{2}$/.test(String(x.date))&&n(x.value)>=30&&n(x.value)<=400).map(x=>({id:String(x.id||id()).slice(0,60),date:String(x.date),value:n(x.value)})):[];
  const st=obj.settings||{};s.settings={dark:!!st.dark,reminders:!!st.reminders,frequency:[2,3].includes(n(st.frequency))?n(st.frequency):3,quietStart:/^\d{2}:\d{2}$/.test(st.quietStart)?st.quietStart:'23:00',quietEnd:/^\d{2}:\d{2}$/.test(st.quietEnd)?st.quietEnd:'07:00',lastReminder:String(st.lastReminder||'').slice(0,60)};s.adjustment=String(obj.adjustment||'').slice(0,280);
@@ -126,9 +199,9 @@ function renderWorkoutWeek(){
  }
  $('workoutWeekNote').textContent=`الأسبوع ${t.week} · تمارين ${state.exerciseIntensity==='vigorous'?'شاقة متدرجة':'متوسطة'} · تمارين المقاومة مرتين أسبوعيًا. يمكنك تبديل الأيام والراحة عند الحاجة؛ توقف عند الدوخة أو ألم الصدر أو ضيق النفس غير المعتاد.`;
 }
-function renderHome(){if(!state.profile)return;const t=totals(), calc=calculate(),plan=plans[state.plan];let d=new Date();$('todayLabel').textContent=new Intl.DateTimeFormat('ar-SA',{weekday:'long',day:'numeric',month:'long'}).format(d);$('planBadge').textContent=calc.atGoal?'محافظة على الوزن':`الخطة ${plan.label}`;$('planSummary').textContent=calc.atGoal?'وصلت للهدف. استمر على عاداتك الصحية.':`هدف يومي تقديري ${format(calc.calories)} سعرة · ${Math.round(bmi(currentWeight())*10)/10} BMI`;
+function renderHome(){if(!state.profile)return;const t=totals(), calc=calculate(),plan=plans[state.plan];let d=new Date();$('todayLabel').textContent=new Intl.DateTimeFormat('ar-SA',{weekday:'long',day:'numeric',month:'long'}).format(d);$('planBadge').textContent=calc.atGoal?'محافظة على الوزن':`الخطة ${plan.label}`;$('planSummary').textContent=calc.atGoal?'وصلت للهدف. استمر على عاداتك الصحية.':`هدف ${calc.manual?'اخترته':'محسوب'}: ${format(calc.calories)} سعرة يوميًا · BMI ${Math.round(bmi(currentWeight())*10)/10}`;
  $('calMaintenance').textContent=format(calc.tdee);$('calDailyTarget').textContent=format(calc.calories);$('calDailyDeficit').textContent=format(calc.deficit);
- $('calorieExplanation').textContent=`احتياج المحافظة ≈ ${format(calc.tdee)}؛ العجز اليومي ≈ ${format(calc.deficit)} سعرة. ${calc.noDeficit?'لا يُنصح بخفض السعرات أكثر دون مختص.':'هدفك مبني على بياناتك وليس رقمًا ثابتًا، ولن نخفضه إلى مستوى غير آمن.'}`;
+ $('calorieExplanation').textContent=`${calc.manual?'أنت حددت هدف السعرات بنفسك، وسيبقى ثابتًا حتى تعدله.':'هدف السعرات محسوب تلقائيًا وفق بياناتك.'} احتياج الثبات ≈ ${format(calc.tdee)}، والعجز ≈ ${format(calc.deficit)} سعرة/يوم، ونزول متوقع ≈ ${calc.weeklyLoss.toFixed(2)} كجم/أسبوع (تقدير وليس ضمانًا). ${calc.manual&&calc.calories>=calc.tdee?'السعرات المختارة لا تحقق عجزًا حسب تقديرنا؛ قد لا ينخفض الوزن.':''}`;
  renderWorkoutHome(calc);
  $('calRemain').textContent=format(Math.max(0,calc.calories-t.food));$('calConsumed').textContent=`المتناول: ${format(t.food)}`;$('calBudget').textContent=`الميزانية: ${format(calc.calories)}`;$('calBar').style.width=`${clamp(t.food/calc.calories*100,0,100)}%`;
  $('waterDisplay').textContent=(t.water/1000).toLocaleString('ar-SA',{maximumFractionDigits:2});$('waterBar').style.width=`${clamp(t.water/state.waterGoal*100,0,100)}%`;$('waterRemain').textContent=t.water>=state.waterGoal?'أحسنت، وصلت لهدفك':`باقي ${format(state.waterGoal-t.water)} مل من ${format(state.waterGoal)}`;
@@ -147,20 +220,26 @@ function drawChart(){const cvs=$('weightChart');if(!cvs||!state.profile||!$('vie
  if(data.length>1){ctx.beginPath();data.forEach((p,i)=>i?ctx.lineTo(xFrom(i),yFrom(p.value)):ctx.moveTo(xFrom(i),yFrom(p.value)));ctx.strokeStyle='#087d78';ctx.lineWidth=3;ctx.stroke()}
  data.forEach((p,i)=>{ctx.beginPath();ctx.arc(xFrom(i),yFrom(p.value),4.1,0,Math.PI*2);ctx.fillStyle='#0cb89b';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#ffffff';ctx.stroke()});ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--muted')||'#666';ctx.textAlign='center';ctx.fillText(data[0].date.slice(5),xFrom(0),h-14);if(data.length>1)ctx.fillText(data.at(-1).date.slice(5),xFrom(data.length-1),h-14);$('chartHelp').textContent='الخط المتقطع يمثل الوزن المستهدف. تغير الوزن يوميًا قد يعكس الماء والطعام، وليس الدهون فقط.'}
 function renderSettings(){if(!state.profile)return;
+ $('dailyCalorieGoal').value=state.customCalories??'';$('dailyCalorieGoal').min=state.profile.sex==='male'?'1500':'1200';
+ const estimate=calculate();$('customCalorieInfo').textContent=`${estimate.manual?'هدفك اليدوي محفوظ': 'الحساب التلقائي مفعل'} · هدف ${format(estimate.calories)} سعرة · المتوقع نحو ${estimate.weeklyLoss.toFixed(2)} كجم أسبوعيًا (تقريبي). اختيار الخطة الهادئة أو المتوسطة أو السريعة يحدد مستوى النشاط، أما السعرات اليدوية فلا تتغير دون موافقتك.`;
  document.querySelectorAll('[data-duration]').forEach(b=>{const active=n(b.dataset.duration)===state.goalDays;b.classList.toggle('on',active);b.setAttribute('aria-pressed',String(active));});
  const v=calculate(),fitness=qualifiesVigorous();
  $('quickGoalFeedback').textContent=`وزنك الحالي ${currentWeight().toFixed(1)} كجم ← هدفك ${state.profile.target.toFixed(1)} كجم. ${timelineText(v)}`;
  document.querySelectorAll('[data-intensity="vigorous"]').forEach(b=>{b.title=fitness?'تمارين شاقة متدرجة لمن اعتادها':'الشدة الشاقة تحتاج لياقة سابقة وملاءمة صحية';b.setAttribute('aria-disabled',String(!fitness));});$('durationSelect').value=String(state.goalDays);document.querySelectorAll('[data-intensity]').forEach(x=>x.classList.toggle('on',x.dataset.intensity===state.exerciseIntensity));$('waterGoal').value=state.waterGoal;$('minutesGoal').value=state.minutesGoal;$('goalWeightInput').value=state.profile.target;$('remindersEnabled').checked=state.settings.reminders;$('quietStart').value=state.settings.quietStart;$('quietEnd').value=state.settings.quietEnd;document.querySelectorAll('[data-frequency]').forEach(x=>x.classList.toggle('on',n(x.dataset.frequency)===state.settings.frequency));document.querySelectorAll('[data-plan]').forEach(x=>x.classList.toggle('active',x.dataset.plan===state.plan));const c=calculate();$('planInfo').textContent=`احتياج المحافظة ≈ ${format(c.tdee)} سعرة/يوم. هدف الطعام ≈ ${format(c.calories)} وعجز ≈ ${format(c.deficit)} سعرة/يوم. ${qualifiesFast()?'':'الخطة المكثفة مقيدة حسب الأهلية.'}`;$('timelineSummary').textContent=timelineText(c);$('notifyStatus').textContent=`الإشعارات: ${('Notification'in window)?Notification.permission:'غير مدعومة في هذا المتصفح'}؛ الجدولة داخل التطبيق فقط ما لم تستورد التقويم.`;}
 function render(){if(!state.profile)return;renderHome();renderProgress();renderSettings();updateFoodEstimate();updateExerciseEstimate();}
-function showSetup(edit=false){const p=state.profile;if(edit&&p){$('age').value=p.age;$('sex').value=p.sex;$('height').value=p.height;$('weight').value=p.weight;$('targetWeight').value=p.target;$('activity').value=p.activity;document.querySelectorAll('[name="health"]').forEach(x=>x.checked=p.health.includes(x.value));}else{$('setupForm').reset()}$('setupError').classList.add('hidden');$('setupDialog').showModal();}
-function setupFromForm(e){e.preventDefault();const p={age:n($('age').value),sex:$('sex').value,height:n($('height').value),weight:n($('weight').value),target:n($('targetWeight').value),activity:n($('activity').value),health:[...document.querySelectorAll('[name="health"]:checked')].map(x=>x.value)};let msg='';if(p.age<18||p.age>100)msg='التطبيق مخصص للبالغين بعمر 18 عامًا أو أكثر.';else if(!['male','female'].includes(p.sex)||p.height<120||p.height>230||p.weight<30||p.weight>400)msg='تحقق من الطول والوزن وبقية البيانات.';else if(p.health.includes('pregnancy')||p.health.includes('eating'))msg='لا يصدر خطوتي خطط نزول وزن آلية للحمل أو الرضاعة أو اضطرابات الأكل؛ يرجى الاستعانة بمختص.';else if(bmiFor(p.height,p.weight)<25)msg='هذه النسخة مخصصة مبدئيًا للبالغين ذوي زيادة الوزن (BMI لا يقل عن 25). استشر مختصًا قبل محاولة خفض وزن يقع في النطاق الطبيعي.';else if(p.target>=p.weight)msg='اختر وزنًا مستهدفًا أقل من الوزن الحالي.';else if(bmiFor(p.height,p.target)<18.5)msg='الوزن المستهدف يدخل نطاق نقص الوزن؛ يُرجى اختيار هدف ملائم طبيًا.';else if(p.health.length&&state.plan==='fast')state.plan='moderate';
+function showSetup(edit=false){const p=state.profile;if(edit&&p){$('setupDailyCalories').value=state.customCalories??'';$('setupPlan').value=state.plan;$('age').value=p.age;$('sex').value=p.sex;$('height').value=p.height;$('weight').value=p.weight;$('targetWeight').value=p.target;$('activity').value=p.activity;document.querySelectorAll('[name="health"]').forEach(x=>x.checked=p.health.includes(x.value));}else{$('setupForm').reset();$('setupDailyCalories').value='';$('setupPlan').value='moderate'}$('setupError').classList.add('hidden');$('setupDialog').showModal();}
+async function setupFromForm(e){e.preventDefault();const p={age:n($('age').value),sex:$('sex').value,height:n($('height').value),weight:n($('weight').value),target:n($('targetWeight').value),activity:n($('activity').value),health:[...document.querySelectorAll('[name="health"]:checked')].map(x=>x.value)};let msg='';if(p.age<18||p.age>100)msg='التطبيق مخصص للبالغين بعمر 18 عامًا أو أكثر.';else if(!['male','female'].includes(p.sex)||p.height<120||p.height>230||p.weight<30||p.weight>400)msg='تحقق من الطول والوزن وبقية البيانات.';else if(p.health.includes('pregnancy')||p.health.includes('eating'))msg='لا يصدر خطوتي خطط نزول وزن آلية للحمل أو الرضاعة أو اضطرابات الأكل؛ يرجى الاستعانة بمختص.';else if(bmiFor(p.height,p.weight)<25)msg='هذه النسخة مخصصة مبدئيًا للبالغين ذوي زيادة الوزن (BMI لا يقل عن 25). استشر مختصًا قبل محاولة خفض وزن يقع في النطاق الطبيعي.';else if(p.target>=p.weight)msg='اختر وزنًا مستهدفًا أقل من الوزن الحالي.';else if(bmiFor(p.height,p.target)<18.5)msg='الوزن المستهدف يدخل نطاق نقص الوزن؛ يُرجى اختيار هدف ملائم طبيًا.';else if(p.health.length&&state.plan==='fast')state.plan='moderate';
+ if(!msg){const chosen=validateCalorieChoice($('setupDailyCalories').value,p,p.weight);if(chosen.message)msg=chosen.message;}
  if(msg){$('setupError').textContent=msg;$('setupError').classList.remove('hidden');return}
- const editing=!!state.profile;state.profile=p;if(!editing){state.weights=[{id:'initial',date:today(),value:p.weight}];state.minutesGoal=plans[state.plan].mins;state.goalStart=today();state.goalStartWeight=p.weight;}else{if(!state.weights.length)state.weights=[{id:'initial',date:today(),value:p.weight}];if(state.weights[0]?.id==='initial')state.weights[0].value=p.weight;}if(state.plan==='fast'&&!qualifiesFast())state.plan='moderate';if(state.exerciseIntensity==='vigorous'&&!qualifiesVigorous())state.exerciseIntensity='moderate';state.adjustment='تم تحديث التقديرات بعد تعديل بياناتك الأساسية.';save();$('setupDialog').close();render();toast('تم إعداد خطتك بنجاح')}
-function switchPlan(plan){if(!plans[plan])return;if(plan==='fast'&&!qualifiesFast()){toast('الخطة المكثفة غير ملائمة حسب مؤشرات الأهلية الحالية');return}state.plan=plan;state.minutesGoal=plans[plan].mins;state.adjustment=`اخترت الخطة ${plans[plan].label}؛ حُسب الهدف مجددًا مع بقاء حدود الأمان.`;save();render();toast('تم تحديث الخطة')}
-function recordWeight(e){e.preventDefault();const val=n($('weighValue').value),date=$('weighDate').value;if(val<30||val>400||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date>today()){toast('أدخل وزنًا وتاريخًا صالحين');return}const old=calculate();const existing=state.weights.find(x=>x.date===date);if(existing){existing.value=val}else state.weights.push({id:id(),date,value:val});const now=calculate();if(now&&old){const change=now.calories-old.calories;state.adjustment=Math.abs(change)>=25?`تغير هدف السعرات من ${format(old.calories)} إلى ${format(now.calories)} بعد تحديث وزنك، لأن الاحتياج التقريبي للطاقة يتغير مع الوزن.`:'سُجّل وزنك. التغير الحالي لا يستلزم تعديلًا كبيرًا في هدف السعرات.'}if(state.plan==='fast'&&!qualifiesFast()){state.plan='moderate';state.adjustment+=' تم تحويل الخطة إلى المتوسطة لأن شروط المستوى المكثف لم تعد متحققة.'}if(state.exerciseIntensity==='vigorous'&&!qualifiesVigorous()){state.exerciseIntensity='moderate';state.adjustment+=' تحولت شدة التمارين إلى متوسطة حفاظًا على السلامة.'}save();render();toast('حُفظ قياس الوزن')}
+ const editing=!!state.profile;
+ state.customCalories=validateCalorieChoice($('setupDailyCalories').value,p,p.weight).value;
+ if(!editing)state.plan=plans[$('setupPlan').value]?$('setupPlan').value:'moderate';
+ state.profile=p;if(!editing){state.weights=[{id:'initial',date:today(),value:p.weight}];state.minutesGoal=plans[state.plan].mins;state.goalStart=today();state.goalStartWeight=p.weight;}else{if(!state.weights.length)state.weights=[{id:'initial',date:today(),value:p.weight}];if(state.weights[0]?.id==='initial')state.weights[0].value=p.weight;}if(state.plan==='fast'&&!qualifiesFast())state.plan='moderate';if(state.exerciseIntensity==='vigorous'&&!qualifiesVigorous())state.exerciseIntensity='moderate';state.adjustment='تم تحديث التقديرات بعد تعديل بياناتك الأساسية.';const saved=await save();if(!saved){$('setupError').textContent='لا يستطيع المتصفح حفظ بياناتك محليًا في هذا الوضع. افتح التطبيق في Safari العادي أو من الشاشة الرئيسية وتأكد من توفر مساحة.';$('setupError').classList.remove('hidden');return}$('setupDialog').close();render();toast('تم حفظ بياناتك محليًا؛ لن تحتاج لإدخالها مجددًا على هذا الجهاز')}
+function switchPlan(plan){if(!plans[plan])return;if(plan==='fast'&&!qualifiesFast()){toast('الخطة المكثفة غير ملائمة حسب مؤشرات الأهلية الحالية');return}state.plan=plan;state.minutesGoal=plans[plan].mins;state.adjustment=`اخترت الخطة ${plans[plan].label}؛ ${state.customCalories?'احتفظنا بالسعرات التي حددتها، وعدّلنا النشاط المقترح فقط.':'أعدنا حساب السعرات والنشاط وفق المستوى الجديد.'}`;save();render();toast('تم تحديث الخطة')}
+function recordWeight(e){e.preventDefault();const val=n($('weighValue').value),date=$('weighDate').value;if(val<30||val>400||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date>today()){toast('أدخل وزنًا وتاريخًا صالحين');return}const old=calculate();const existing=state.weights.find(x=>x.date===date);if(existing){existing.value=val}else state.weights.push({id:id(),date,value:val});const now=calculate();if(now&&old){const change=now.calories-old.calories;state.adjustment=state.customCalories?'سُجّل وزنك. حافظنا على هدف السعرات الذي اخترته؛ قد يتغيّر تقدير سرعة النزول بسبب تغيّر الوزن.':Math.abs(change)>=25?`تغير هدف السعرات من ${format(old.calories)} إلى ${format(now.calories)} بعد تحديث وزنك، لأن الاحتياج التقريبي للطاقة يتغير مع الوزن.`:'سُجّل وزنك. التغير الحالي لا يستلزم تعديلًا كبيرًا في هدف السعرات.'}if(state.plan==='fast'&&!qualifiesFast()){state.plan='moderate';state.adjustment+=' تم تحويل الخطة إلى المتوسطة لأن شروط المستوى المكثف لم تعد متحققة.'}if(state.exerciseIntensity==='vigorous'&&!qualifiesVigorous()){state.exerciseIntensity='moderate';state.adjustment+=' تحولت شدة التمارين إلى متوسطة حفاظًا على السلامة.'}save();render();toast('حُفظ قياس الوزن')}
 function download(text,name,type){const blob=new Blob([text],{type});const url=URL.createObjectURL(blob);let a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000)}
 function backup(){download(JSON.stringify(state,null,2),`khatwati-backup-${today()}.json`,'application/json;charset=utf-8');toast('تم إنشاء النسخة الاحتياطية')}
-async function importBackup(file){if(!file||file.size>3_000_000){toast('الملف غير مناسب أو كبير جدًا');return}try{const content=await file.text();const loaded=validateData(JSON.parse(content));if(!confirm('سيستبدل الاستيراد جميع بيانات خطوتي الحالية في هذا الجهاز. هل تريد المتابعة؟'))return;state=loaded;save();applyTheme();render();showView('home');if(!state.profile)showSetup();toast('تم استيراد النسخة بنجاح')}catch(e){toast(`تعذر الاستيراد: ${e.message}`)}}
+async function importBackup(file){if(!file||file.size>3_000_000){toast('الملف غير مناسب أو كبير جدًا');return}try{const content=await file.text();const loaded=validateData(JSON.parse(content));if(!confirm('سيستبدل الاستيراد جميع بيانات خطوتي الحالية في هذا الجهاز. هل تريد المتابعة؟'))return;state=loaded;const saved=await save();if(!saved){toast('لم ينجح الحفظ المحلي؛ تحقق من مساحة الجهاز');return}applyTheme();render();showView('home');if(!state.profile)showSetup();toast('تم استيراد النسخة بنجاح')}catch(e){toast(`تعذر الاستيراد: ${e.message}`)}}
 function applyTheme(){document.body.classList.toggle('dark',state.settings.dark);$('themeToggle').textContent=state.settings.dark?'☀':'☾';document.querySelector('meta[name="theme-color"]').content=state.settings.dark?'#09282d':'#087D78';}
 function minuteOf(s){const [h,m]=s.split(':').map(Number);return h*60+m}
 function isQuiet(minutes){const start=minuteOf(state.settings.quietStart),end=minuteOf(state.settings.quietEnd);if(start===end)return false;return start<end?minutes>=start&&minutes<end:minutes>=start||minutes<end}
@@ -170,7 +249,16 @@ function checkReminders(){if(!state.profile||!state.settings.reminders)return;co
 function icsEscape(s){return String(s).replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}
 function exportCalendar(){if(!state.settings.reminders){toast('فعّل التذكيرات أولًا');return}const slots=scheduledMinutes();if(!slots.length){toast('فترة النوم تغطي جميع المواعيد');return}const now=new Date(),fmtDate=d=>`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`,stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');let lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Khatwati//Reminders//AR','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:تذكيرات خطوتي'];for(const mins of slots){const date=new Date(now.getFullYear(),now.getMonth(),now.getDate(),Math.floor(mins/60),mins%60,0);if(date<=now)date.setDate(date.getDate()+1);const start=fmtDate(date)+'T'+String(date.getHours()).padStart(2,'0')+String(date.getMinutes()).padStart(2,'0')+'00';lines.push('BEGIN:VEVENT',`UID:${id()}@khatwati.local`,`DTSTAMP:${stamp}`,`DTSTART:${start}`,`DURATION:PT5M`,'RRULE:FREQ=DAILY;COUNT=365',`SUMMARY:${icsEscape('خطوتي: تذكير ماء وحركة')}`,`DESCRIPTION:${icsEscape('افتح تطبيق خطوتي لمراجعة ما تبقى من أهدافك. يمكنك إيقاف هذه التذكيرات من التقويم.')}`,'BEGIN:VALARM','TRIGGER:PT0M','ACTION:DISPLAY','DESCRIPTION:حان وقت مراجعة أهدافك في خطوتي','END:VALARM','END:VEVENT')};lines.push('END:VCALENDAR');download(lines.join('\r\n')+'\r\n','khatwati-reminders.ics','text/calendar;charset=utf-8');toast('تم تصدير التقويم. استورده في تطبيق التقويم لتصل التنبيهات وهو مغلق.')}
 function wire(){document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));document.querySelectorAll('[data-jump]').forEach(b=>b.addEventListener('click',()=>{let v=b.dataset.jump;if(v==='add-exercise'){showView('add');setAddTab('exercise')}else{showView(v)}}));document.querySelectorAll('[data-addtab]').forEach(b=>b.addEventListener('click',()=>setAddTab(b.dataset.addtab)));document.querySelectorAll('[data-foodmode]').forEach(b=>b.addEventListener('click',()=>setFoodMode(b.dataset.foodmode)));
- $('setupForm').addEventListener('submit',setupFromForm);$('editProfileBtn').addEventListener('click',()=>showSetup(true));$('foodSearch').addEventListener('input',fillFoodList);$('foodItem').addEventListener('change',updateFoodEstimate);$('foodServings').addEventListener('input',updateFoodEstimate);$('manualKcal').addEventListener('input',updateFoodEstimate);$('exerciseType').addEventListener('change',updateExerciseEstimate);$('exerciseMinutes').addEventListener('input',updateExerciseEstimate);
+ $('setupForm').addEventListener('submit',setupFromForm);
+ $('calorieGoalForm').addEventListener('submit',e=>{
+  e.preventDefault();const raw=$('dailyCalorieGoal').value;
+  const checked=validateCalorieChoice(raw,state.profile,currentWeight());
+  if(checked.message){toast(checked.message);$('customCalorieInfo').textContent=checked.message;return}
+  state.customCalories=checked.value;
+  state.adjustment=checked.value?'تم تثبيت هدف السعرات الذي اخترته. مستويات الخطة تؤثر في التمارين؛ يُحسب النزول المتوقع من عجز السعرات الفعلي.':'أعدنا تفعيل حساب السعرات التلقائي حسب بياناتك.';
+  save();render();toast(checked.value?'تم حفظ هدف السعرات يدويًا':'تم تفعيل الحساب التلقائي');
+ });
+ $('resetCalorieGoal').addEventListener('click',()=>{state.customCalories=null;state.adjustment='تم الرجوع للحساب التلقائي للسعرات.';save();render();toast('تم التفعيل')});$('editProfileBtn').addEventListener('click',()=>showSetup(true));$('foodSearch').addEventListener('input',fillFoodList);$('foodItem').addEventListener('change',updateFoodEstimate);$('foodServings').addEventListener('input',updateFoodEstimate);$('manualKcal').addEventListener('input',updateFoodEstimate);$('exerciseType').addEventListener('change',updateExerciseEstimate);$('exerciseMinutes').addEventListener('input',updateExerciseEstimate);
  $('foodForm').addEventListener('submit',e=>{e.preventDefault();let label='',kcal=0,amount=0;if(foodMode==='catalog'){const f=foodSelection();const servings=n($('foodServings').value);if(!f||servings<.25||servings>30){toast('حدد طعامًا وحصة صحيحة');return}label=`${f.name} × ${servings} (${f.unit})`;kcal=Math.round(f.kcal*servings);amount=servings}else{kcal=n($('manualKcal').value);label=$('manualFoodName').value.trim().slice(0,70)||'وجبة مدخلة يدويًا';amount=1;if(kcal<1||kcal>5000){toast('أدخل سعرات من 1 إلى 5000');return}}addLog({type:'food',label,amount,calories:kcal});$('foodSearch').value='';$('foodServings').value=1;$('manualKcal').value='';$('manualFoodName').value='';fillFoodList();showView('home')});
  $('exerciseForm').addEventListener('submit',e=>{e.preventDefault();const act=activities.find(x=>x.id===$('exerciseType').value),mins=n($('exerciseMinutes').value);if(!act||mins<1||mins>300){toast('أدخل نوع نشاط ومدة صالحة');return}addLog({type:'exercise',label:act.name,amount:mins,minutes:mins,calories:updateExerciseEstimate()});showView('home')});
  function addWater(ml){if(ml<1||ml>2000)return toast('أدخل كمية ماء صالحة');addLog({type:'water',label:'شرب ماء',amount:ml,calories:0});showView('home')}
@@ -185,9 +273,9 @@ function wire(){document.querySelectorAll('[data-view]').forEach(b=>b.addEventLi
  $('remindersEnabled').addEventListener('change',e=>{state.settings.reminders=e.target.checked;save();renderSettings();toast(e.target.checked?'فُعّلت تذكيرات التطبيق المفتوح':'تم تعطيل التذكيرات')});document.querySelectorAll('[data-frequency]').forEach(b=>b.addEventListener('click',()=>{state.settings.frequency=n(b.dataset.frequency);state.settings.lastReminder='';save();renderSettings()}));
  for(const id of ['quietStart','quietEnd'])$(id).addEventListener('change',()=>{state.settings.quietStart=$('quietStart').value;state.settings.quietEnd=$('quietEnd').value;state.settings.lastReminder='';save();renderSettings()});
  $('permissionBtn').addEventListener('click',async()=>{if(!('Notification'in window)){toast('هذا الجهاز أو المتصفح لا يدعم إشعارات الويب في هذا الوضع');return}try{const result=await Notification.requestPermission();renderSettings();toast(result==='granted'?'تم السماح. تذكيرات التطبيق المفتوح جاهزة.':'لم تُمنح صلاحية الإشعارات')}catch(e){toast('تعذر طلب الإذن. جرّب تثبيت التطبيق على الشاشة الرئيسية')}});
- $('calendarBtn').addEventListener('click',exportCalendar);$('exportBtn').addEventListener('click',backup);$('importBtn').addEventListener('click',()=>$('importFile').click());$('importFile').addEventListener('change',async e=>{await importBackup(e.target.files?.[0]);e.target.value=''});$('deleteBtn').addEventListener('click',()=>{if(!confirm('هل أنت متأكد من حذف جميع بياناتك؟ لا يمكن التراجع إلا بنسخة احتياطية.'))return;localStorage.removeItem(KEY);state=defaults();applyTheme();showView('home');showSetup();toast('تم مسح بيانات هذا الجهاز')});$('themeToggle').addEventListener('click',()=>{state.settings.dark=!state.settings.dark;save();applyTheme();if($('view-progress').classList.contains('active'))drawChart()});}
+ $('calendarBtn').addEventListener('click',exportCalendar);$('exportBtn').addEventListener('click',backup);$('importBtn').addEventListener('click',()=>$('importFile').click());$('importFile').addEventListener('change',async e=>{await importBackup(e.target.files?.[0]);e.target.value=''});$('deleteBtn').addEventListener('click',async()=>{if(!confirm('هل أنت متأكد من حذف جميع بياناتك؟ لا يمكن التراجع إلا بنسخة احتياطية.'))return;try{localStorage.removeItem(KEY)}catch(e){}await writeQueue.catch(()=>{});await clearIndexed();state=defaults();applyTheme();showView('home');showSetup();toast('تم مسح بيانات هذا الجهاز')});$('themeToggle').addEventListener('click',()=>{state.settings.dark=!state.settings.dark;save();applyTheme();if($('view-progress').classList.contains('active'))drawChart()});}
 async function registerSW(){if('serviceWorker'in navigator){try{await navigator.serviceWorker.register('./sw.js',{scope:'./'})}catch(e){console.warn('تعذر تفعيل وضع عدم الاتصال',e)}}}
 let deferredInstall=null;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;$('installBtn').classList.add('hidden')});
-function init(){for(const a of activities){$('exerciseType').add(new Option(a.name,a.id))}fillFoodList();applyTheme();wire();$('weighDate').value=today();if(state.profile){render()}else{showSetup()}registerSW();setInterval(checkReminders,60_000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkReminders()});}
+async function init(){await restoreState();for(const a of activities){$('exerciseType').add(new Option(a.name,a.id))}fillFoodList();applyTheme();wire();$('weighDate').value=today();if(state.profile){render()}else{showSetup()}registerSW();setInterval(checkReminders,60_000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkReminders()});}
 init();
 })();
