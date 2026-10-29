@@ -221,6 +221,7 @@ function drawChart(){const cvs=$('weightChart');if(!cvs||!state.profile||!$('vie
  data.forEach((p,i)=>{ctx.beginPath();ctx.arc(xFrom(i),yFrom(p.value),4.1,0,Math.PI*2);ctx.fillStyle='#0cb89b';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#ffffff';ctx.stroke()});ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--muted')||'#666';ctx.textAlign='center';ctx.fillText(data[0].date.slice(5),xFrom(0),h-14);if(data.length>1)ctx.fillText(data.at(-1).date.slice(5),xFrom(data.length-1),h-14);$('chartHelp').textContent='الخط المتقطع يمثل الوزن المستهدف. تغير الوزن يوميًا قد يعكس الماء والطعام، وليس الدهون فقط.'}
 function renderSettings(){if(!state.profile)return;
  $('dailyCalorieGoal').value=state.customCalories??'';$('dailyCalorieGoal').min=state.profile.sex==='male'?'1500':'1200';
+ $('storageStatus').textContent='الحفظ على جهازك فقط (localStorage + IndexedDB). لا يرسل التطبيق بياناتك إلى GitHub. استخدم نفس المتصفح أو أيقونة التطبيق دائمًا، واحتفظ بنسخة احتياطية.';
  const estimate=calculate();$('customCalorieInfo').textContent=`${estimate.manual?'هدفك اليدوي محفوظ': 'الحساب التلقائي مفعل'} · هدف ${format(estimate.calories)} سعرة · المتوقع نحو ${estimate.weeklyLoss.toFixed(2)} كجم أسبوعيًا (تقريبي). اختيار الخطة الهادئة أو المتوسطة أو السريعة يحدد مستوى النشاط، أما السعرات اليدوية فلا تتغير دون موافقتك.`;
  document.querySelectorAll('[data-duration]').forEach(b=>{const active=n(b.dataset.duration)===state.goalDays;b.classList.toggle('on',active);b.setAttribute('aria-pressed',String(active));});
  const v=calculate(),fitness=qualifiesVigorous();
