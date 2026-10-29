@@ -7,3 +7,17 @@ body.dark{--primary:#4ad4be;--primary-deep:#0a282e;--primary-soft:#153e40;--text
 .workout-card h2{font-size:17px;margin:0}.workout-title{display:block;margin-top:14px;font-size:20px;color:var(--primary)}
 .workout-card .muted{margin:7px 0 12px}.workout-card .micro{margin:10px 0 4px}
 .workout-list{display:grid;gap:7px;margin-top:14px}.workout-day{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;background:var(--primary-soft);border:1px solid var(--border);border-radius:12px;font-size:13px}.workout-day.current{border:2px solid var(--primary)}.workout-day span{color:var(--muted);text-align:left}.workout-day strong{white-space:nowrap}#timelineSummary{margin:14px 0 17px}#calorieExplanation{font-weight:600}
+/* إبراز خيارات خطة النزول مباشرة في الشاشة الرئيسية — v1.2 */
+.quick-plan{border:2px solid color-mix(in srgb,var(--primary) 40%,var(--border));background:linear-gradient(145deg,var(--surface),var(--primary-soft));}
+.quick-plan h2{font-size:18px;margin:0}.quick-plan .muted{margin:9px 0 12px}
+.quick-pill-group{display:flex;gap:8px;margin:7px 0 13px}
+.quick-pill-group button{flex:1;min-height:46px;padding:9px 5px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-weight:750;font-size:13px}
+.quick-pill-group button.on{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 3px 14px #075c5833}
+.quick-plan .notice{margin:10px 0;font-size:12px;background:var(--surface);color:var(--text)}
+.quick-plan .text-btn{margin-top:6px;text-align:right}
+.cal-breakdown{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:14px 0 7px}
+.cal-breakdown>div{min-width:0;text-align:center;background:#ffffff1b;border:1px solid #ffffff30;border-radius:12px;padding:10px 3px}
+.cal-breakdown small{display:block;font-size:10px;color:#d8f5ea}
+.cal-breakdown strong{display:block;margin-top:6px;color:white;font-size:17px;font-weight:800}
+body.dark .quick-pill-group button.on{background:#0a8f81;border-color:#75cfc2;color:white}
+@media(max-width:360px){.quick-pill-group{gap:5px}.quick-pill-group button{font-size:12px;padding:8px 3px}.cal-breakdown strong{font-size:14px}}
