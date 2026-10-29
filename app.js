@@ -6,7 +6,7 @@ const IDB_NAME='khatwati-private-device-v1';
 const IDB_STORE='settings';
 const defaults=()=>({version:1,_savedAt:0,profile:null,customCalories:null,plan:'moderate',goalDays:30,goalStart:'',goalStartWeight:0,exerciseIntensity:'moderate',waterGoal:2200,minutesGoal:30,logs:[],weights:[],adjustment:'',settings:{dark:false,reminders:false,frequency:3,quietStart:'23:00',quietEnd:'07:00',lastReminder:''}});
 let state=defaults();
-try { const raw=localStorage.getItem(KEY); if(raw)state=validateData(JSON.parse(raw)); }catch(e){console.warn('تعذر استعادة الحفظ المحلي',e)}
+// لا نقرأ البيانات حتى تُجهَّز كل دوال التحقق داخل init()؛ تفاديًا لخطأ التهيئة المبكرة.
 const $=(id)=>document.getElementById(id);
 const today=()=>{let d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 const format=(v)=>Math.round(v).toLocaleString('ar-SA');
