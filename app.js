@@ -41,7 +41,52 @@ const workoutTemplates={
 const foodCatalog=[
  ['rice','أرز أبيض مطبوخ','100 جم',130],['kabsa','كبسة رز ودجاج','طبق متوسط (300 جم)',530],['brownrice','أرز بني مطبوخ','100 جم',111],['chicken','صدر دجاج مشوي','100 جم',165],['meat','لحم بقري مطبوخ قليل الدهن','100 جم',217],['fish','سمك مشوي','100 جم',128],['salmon','سلمون مطبوخ','100 جم',206],['egg','بيضة مسلوقة','حبة كبيرة',78],['egg2','بيض مقلي','حبة متوسطة',95],['bread','خبز عربي أبيض','رغيف صغير (60 جم)',165],['toast','توست أسمر','شريحة',75],['oats','شوفان جاف','40 جم',155],['milk','حليب قليل الدسم','كوب 240 مل',105],['yogurt','زبادي سادة','علبة 170 جم',110],['greek','زبادي يوناني سادة','170 جم',100],['cheese','جبن أبيض','30 جم',80],['dates','تمر','حبة متوسطة',23],['apple','تفاح','حبة متوسطة',95],['banana','موز','حبة متوسطة',105],['orange','برتقال','حبة متوسطة',62],['salad','سلطة خضراء دون تتبيلة','طبق 200 جم',45],['cucumber','خيار','100 جم',15],['tomato','طماطم','100 جم',18],['lentils','عدس مطبوخ','100 جم',116],['hummus','حمص بالطحينة','100 جم',166],['foul','فول مدمس دون زيت','100 جم',110],['oliveoil','زيت زيتون','ملعقة طعام',119],['nuts','مكسرات غير مملحة','30 جم',180],['coffee','قهوة سوداء دون سكر','كوب',3],['latte','لاتيه بحليب دون سكر','كوب 240 مل',125],['juice','عصير برتقال','كوب 240 مل',112],['cola','مشروب غازي عادي','علبة 330 مل',139],['samosa','سمبوسة مقلية','حبة متوسطة',130],['shawarma','شاورما دجاج','ساندويتش متوسط',450],['burger','برجر لحم','ساندويتش متوسط',450],['potato','بطاطس مسلوقة','100 جم',87],['fries','بطاطس مقلية','100 جم',312],['chocolate','شوكولاتة بالحليب','25 جم',135],['icecream','آيس كريم','نصف كوب',140]
 ].map(([id,name,unit,kcal])=>({id,name,unit,kcal}));
-const activities=[['slowwalk','مشي هادئ',2.8],['walk','مشي متوسط',3.8],['brisk','مشي سريع',4.8],['run','جري خفيف',7],['run2','جري متوسط',9.8],['cycle','دراجة بوتيرة متوسطة',6],['swim','سباحة ترفيهية',6],['strength','تمارين مقاومة متوسطة',3.5],['home','تمارين منزلية خفيفة',3],['football','كرة قدم ترفيهية',7],['stairs','صعود الدرج',8]].map(([id,name,met])=>({id,name,met}));
+// قيم MET مرجعية تقريبية من Compendium of Physical Activities (2024).
+const activities=[
+ ['slowwalk','مشي هادئ',2.8],['walk','مشي متوسط',3.8],['brisk','مشي سريع',4.8],
+ ['run','جري خفيف',7],['run2','جري متوسط',9.8],['cycle','دراجة بوتيرة متوسطة',6],
+ ['swim','سباحة ترفيهية',6],['strength','حديد / مقاومة متوسطة',3.5],
+ ['strengthlight','حديد خفيف',2.5],['strengthhard','حديد شاق',6],
+ ['squats','سكوات أو ديدلفت',5],['circuitweights','تمارين حديد دائرية',5.8],
+ ['bodyweight','تمارين وزن الجسم',3],['home','تمارين منزلية خفيفة',3],
+ ['home2','تمارين منزلية متوسطة',3.8],['football','كرة قدم ترفيهية',7],
+ ['stairs','صعود الدرج',8],['yoga','يوغا هادئة',2.5],['stretch','إطالة وتمدد',2.3]
+].map(([id,name,met])=>({id,name,met}));
+// الاسم الحر وحده لا يحدد الجهد؛ يجب تحديد الفئة والشدة لتقدير الحرق.
+const exerciseCategories={
+ weights:{label:'حديد / رفع أوزان',mets:{light:2.5,moderate:3.5,vigorous:6}},
+ body:{label:'تمارين وزن الجسم',mets:{light:2.8,moderate:3.8,vigorous:6.5}},
+ cardio:{label:'كارديو / أجهزة',mets:{light:3.5,moderate:5,vigorous:8}},
+ sports:{label:'رياضة جماعية أو فردية',mets:{light:3,moderate:5.5,vigorous:8}},
+ flexibility:{label:'مرونة / إطالة / يوغا',mets:{light:2,moderate:2.5,vigorous:3.2}},
+ other:{label:'نشاط آخر',mets:{light:2.5,moderate:3.8,vigorous:6}}
+};
+function exerciseChoice(){
+ const option=$('exerciseType').value;
+ if(option!=='custom'){
+  const act=activities.find(x=>x.id===option);
+  return act?{name:act.name,met:act.met}:null;
+ }
+ const name=$('exerciseCustomName').value.trim().replace(/\s+/g,' ').slice(0,80);
+ const cat=exerciseCategories[$('exerciseCategory').value];
+ const effort=$('exerciseEffort').value;
+ if(!name||!cat||!Object.prototype.hasOwnProperty.call(cat.mets,effort))return null;
+ return {name,met:cat.mets[effort],category:cat.label,effort};
+}
+function toggleCustomExercise(){
+ const custom=$('exerciseType').value==='custom';
+ $('exerciseCustomFields').classList.toggle('hidden',!custom);
+ $('exerciseCustomName').required=custom;
+ $('exerciseCustomName').disabled=!custom;
+ $('exerciseCategory').disabled=!custom;
+ $('exerciseEffort').disabled=!custom;
+ updateExerciseEstimate();
+}
+function estimatedExerciseCalories(choice,mins,weight){
+ if(!choice||!Number.isFinite(mins)||mins<1||mins>300||!Number.isFinite(weight)||weight<=0)return 0;
+ // Extra calories above rest, not total energy; avoid double counting resting burn.
+ return Math.round(Math.max(0,choice.met-1)*weight*mins/60);
+}
 function currentWeight(){return [...state.weights].sort((a,b)=>a.date.localeCompare(b.date)).at(-1)?.value??state.profile?.weight??0}
 function bmi(w){const h=state.profile.height/100;return w/(h*h)}
 function flagged(){return state.profile?.health?.length>0}
@@ -160,7 +205,15 @@ let foodMode='catalog';function setFoodMode(mode){foodMode=mode;document.querySe
 function foodSelection(){return foodCatalog.find(x=>x.id===$('foodItem').value)}
 function fillFoodList(){let term=$('foodSearch').value.trim().toLocaleLowerCase('ar');let match=foodCatalog.filter(x=>x.name.includes(term));let previous=$('foodItem').value;$('foodItem').replaceChildren();for(const x of match){let opt=new Option(`${x.name} — ${x.unit} (${x.kcal} سعرة)`,x.id);$('foodItem').add(opt)}if(match.some(x=>x.id===previous))$('foodItem').value=previous;updateFoodEstimate()}
 function updateFoodEstimate(){const f=foodSelection();const amount=n($('foodServings').value);const value=foodMode==='manual'?n($('manualKcal').value):(f?f.kcal*amount:0);$('foodEstimate').textContent=`${format(Math.max(0,value))} سعرة`;}
-function updateExerciseEstimate(){const activity=activities.find(x=>x.id===$('exerciseType').value);const duration=n($('exerciseMinutes').value);const net=activity?Math.round(Math.max(0,activity.met-1)*currentWeight()*duration/60):0;$('exerciseEstimate').textContent=`${format(net)} سعرة`;return net;}
+function updateExerciseEstimate(){
+ const choice=exerciseChoice(),duration=n($('exerciseMinutes').value);
+ const net=estimatedExerciseCalories(choice,duration,currentWeight());
+ $('exerciseEstimate').textContent=choice&&duration>=1&&duration<=300?`${format(net)} سعرة تقريبًا`:'—';
+ $('exerciseEstimateDetails').textContent=choice&&duration>=1&&duration<=300?
+  `${choice.name} · ${duration} دقيقة · وزن ${currentWeight().toFixed(1)} كجم · جهد ${choice.met} MET · صافي الحرق فوق الراحة`:
+  'اختر التمرين وأدخل مدة صحيحة لتظهر السعرات التقديرية.';
+ return net;
+}
 function timelineText(c=calculate()){
  if(!c)return '';
  const time=c.period,daysLabel=durationLabels[time.days];
@@ -259,9 +312,20 @@ function wire(){document.querySelectorAll('[data-view]').forEach(b=>b.addEventLi
   state.adjustment=checked.value?'تم تثبيت هدف السعرات الذي اخترته. مستويات الخطة تؤثر في التمارين؛ يُحسب النزول المتوقع من عجز السعرات الفعلي.':'أعدنا تفعيل حساب السعرات التلقائي حسب بياناتك.';
   save();render();toast(checked.value?'تم حفظ هدف السعرات يدويًا':'تم تفعيل الحساب التلقائي');
  });
- $('resetCalorieGoal').addEventListener('click',()=>{state.customCalories=null;state.adjustment='تم الرجوع للحساب التلقائي للسعرات.';save();render();toast('تم التفعيل')});$('editProfileBtn').addEventListener('click',()=>showSetup(true));$('foodSearch').addEventListener('input',fillFoodList);$('foodItem').addEventListener('change',updateFoodEstimate);$('foodServings').addEventListener('input',updateFoodEstimate);$('manualKcal').addEventListener('input',updateFoodEstimate);$('exerciseType').addEventListener('change',updateExerciseEstimate);$('exerciseMinutes').addEventListener('input',updateExerciseEstimate);
+ $('resetCalorieGoal').addEventListener('click',()=>{state.customCalories=null;state.adjustment='تم الرجوع للحساب التلقائي للسعرات.';save();render();toast('تم التفعيل')});$('editProfileBtn').addEventListener('click',()=>showSetup(true));$('foodSearch').addEventListener('input',fillFoodList);$('foodItem').addEventListener('change',updateFoodEstimate);$('foodServings').addEventListener('input',updateFoodEstimate);$('manualKcal').addEventListener('input',updateFoodEstimate);$('exerciseType').addEventListener('change',toggleCustomExercise);$('exerciseMinutes').addEventListener('input',updateExerciseEstimate);
+ $('exerciseCategory').addEventListener('change',updateExerciseEstimate);
+ $('exerciseEffort').addEventListener('change',updateExerciseEstimate);
+ $('exerciseCustomName').addEventListener('input',updateExerciseEstimate);
  $('foodForm').addEventListener('submit',e=>{e.preventDefault();let label='',kcal=0,amount=0;if(foodMode==='catalog'){const f=foodSelection();const servings=n($('foodServings').value);if(!f||servings<.25||servings>30){toast('حدد طعامًا وحصة صحيحة');return}label=`${f.name} × ${servings} (${f.unit})`;kcal=Math.round(f.kcal*servings);amount=servings}else{kcal=n($('manualKcal').value);label=$('manualFoodName').value.trim().slice(0,70)||'وجبة مدخلة يدويًا';amount=1;if(kcal<1||kcal>5000){toast('أدخل سعرات من 1 إلى 5000');return}}addLog({type:'food',label,amount,calories:kcal});$('foodSearch').value='';$('foodServings').value=1;$('manualKcal').value='';$('manualFoodName').value='';fillFoodList();showView('home')});
- $('exerciseForm').addEventListener('submit',e=>{e.preventDefault();const act=activities.find(x=>x.id===$('exerciseType').value),mins=n($('exerciseMinutes').value);if(!act||mins<1||mins>300){toast('أدخل نوع نشاط ومدة صالحة');return}addLog({type:'exercise',label:act.name,amount:mins,minutes:mins,calories:updateExerciseEstimate()});showView('home')});
+ $('exerciseForm').addEventListener('submit',e=>{
+  e.preventDefault();
+  const choice=exerciseChoice(),mins=n($('exerciseMinutes').value);
+  if(!choice||!Number.isInteger(mins)||mins<1||mins>300){toast('اكتب اسم التمرين واختر فئته وشدته ومدة صحيحة بالدقائق');return}
+  const calories=estimatedExerciseCalories(choice,mins,currentWeight());
+  addLog({type:'exercise',label:choice.name,amount:mins,minutes:mins,calories});
+  $('exerciseCustomName').value='';$('exerciseMinutes').value='30';
+  showView('home');
+ });
  function addWater(ml){if(ml<1||ml>2000)return toast('أدخل كمية ماء صالحة');addLog({type:'water',label:'شرب ماء',amount:ml,calories:0});showView('home')}
  $('water250').addEventListener('click',()=>addWater(250));$('water500').addEventListener('click',()=>addWater(500));document.querySelectorAll('[data-water]').forEach(b=>b.addEventListener('click',()=>addWater(n(b.dataset.water))));$('waterForm').addEventListener('submit',e=>{e.preventDefault();addWater(n($('customWater').value));$('customWater').value=''});
  document.addEventListener('click',e=>{const target=e.target.closest('[data-remove-log]');if(target)deleteLog(target.dataset.removeLog);const weightTarget=e.target.closest('[data-remove-weight]');if(weightTarget){state.weights=state.weights.filter(x=>x.id!==weightTarget.dataset.removeWeight);save();render();toast('حُذف القياس')}});
@@ -277,6 +341,6 @@ function wire(){document.querySelectorAll('[data-view]').forEach(b=>b.addEventLi
  $('calendarBtn').addEventListener('click',exportCalendar);$('exportBtn').addEventListener('click',backup);$('importBtn').addEventListener('click',()=>$('importFile').click());$('importFile').addEventListener('change',async e=>{await importBackup(e.target.files?.[0]);e.target.value=''});$('deleteBtn').addEventListener('click',async()=>{if(!confirm('هل أنت متأكد من حذف جميع بياناتك؟ لا يمكن التراجع إلا بنسخة احتياطية.'))return;try{localStorage.removeItem(KEY)}catch(e){}await writeQueue.catch(()=>{});await clearIndexed();state=defaults();applyTheme();showView('home');showSetup();toast('تم مسح بيانات هذا الجهاز')});$('themeToggle').addEventListener('click',()=>{state.settings.dark=!state.settings.dark;save();applyTheme();if($('view-progress').classList.contains('active'))drawChart()});}
 async function registerSW(){if('serviceWorker'in navigator){try{await navigator.serviceWorker.register('./sw.js',{scope:'./'})}catch(e){console.warn('تعذر تفعيل وضع عدم الاتصال',e)}}}
 let deferredInstall=null;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;$('installBtn').classList.remove('hidden')});$('installBtn').addEventListener('click',async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;$('installBtn').classList.add('hidden')});
-async function init(){await restoreState();for(const a of activities){$('exerciseType').add(new Option(a.name,a.id))}fillFoodList();applyTheme();wire();$('weighDate').value=today();if(state.profile){render()}else{showSetup()}registerSW();setInterval(checkReminders,60_000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkReminders()});}
+async function init(){await restoreState();for(const a of activities){$('exerciseType').add(new Option(a.name,a.id))}$('exerciseType').add(new Option('✍️ تمرين من اختياري — أكتب اسمه','custom'));toggleCustomExercise();fillFoodList();applyTheme();wire();$('weighDate').value=today();if(state.profile){render()}else{showSetup()}registerSW();setInterval(checkReminders,60_000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkReminders()});}
 init();
 })();
